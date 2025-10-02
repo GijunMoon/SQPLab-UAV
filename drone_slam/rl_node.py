@@ -14,14 +14,15 @@ import numpy as np
 import time
 
 # RL 라이브러리
-import gym
+#import gymnasium as gym
 import stable_baselines3 as sb3
 
 class RLDroneFollowerNode(Node):
     def __init__(self):
         super().__init__('rl_node')
 
-        self.takeoff_done = False #이륙 했을때만 동작
+        self.takeoff_done = False #이륙 했을때만 동작 
+        #fail safe alret!!!!!!!!
         self.takeoff_time = None
 
         # 고정 목적지 (예: 미리 지정된 고정 위치)
@@ -32,7 +33,7 @@ class RLDroneFollowerNode(Node):
         # subscriber: follower drone odom (ENU 좌표)
         self.subscription = self.create_subscription(
             Odometry,
-            '/odom',
+            '/mavros/odometry/in',
             self.odom_callback,
             10)
 
@@ -49,7 +50,9 @@ class RLDroneFollowerNode(Node):
         self.current_state = None
 
     def load_rl_model(self):
-        model = sb3.SAC.load('/home/sqplab/ws_ros2/src/drone_slam/drone_slam/model.zip')
+        model = sb3.SAC.load(
+        	'/home/sqplab/ws_ros2/src/SQPLab-UAV/drone_slam/model.zip'
+        	)
         self.get_logger().info("RL 모델 연결")
         self.max_steps = 500000
         self.step_count = 0
@@ -76,7 +79,7 @@ class RLDroneFollowerNode(Node):
         # 이륙 완료 시점 판단
         if self.takeoff_time is None:
             self.takeoff_time = self.get_clock().now().nanoseconds
-            self.takeoff_done = False
+            self.takeoff_done = False # fail safe alret!!!!!!!
             self.get_logger().info("이륙 대기 시작")
         elapsed_time = (self.get_clock().now().nanoseconds - self.takeoff_time) / 1e9
         if self.check_takeoff_stable(msg):

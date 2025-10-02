@@ -16,17 +16,10 @@ class OdomConverter(Node):
     def __init__(self):
         super().__init__('odom_converter')
 
-        # Ensure sim time is used
-        self.set_parameters([rclpy.parameter.Parameter(
-            'use_sim_time',
-            rclpy.Parameter.Type.BOOL,
-            True
-        )])
-
         # Subscribe to PX4 odometry (NED frame)
         self.subscription = self.create_subscription(
-            VehicleOdometry,
-            '/fmu/out/vehicle_odometry',
+            Odometry,
+            '/mavros/odometry/in',
             self.listener_callback,
             qos_profile_sensor_data
         )
