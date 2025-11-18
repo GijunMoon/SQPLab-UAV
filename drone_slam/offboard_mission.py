@@ -20,18 +20,19 @@ class OffboardTakeoffNode(Node):
 
         # RL output 입력 받을 goal_pose
         self.subscription = self.create_subscription(
-            PoseStamped, '/goal_pose', self.goal_pose_callback, 10)
+            PoseStamped, '/rl/goal_position', self.goal_pose_callback, 10)
 
         self.target_pose = PoseStamped()
+        self.target_pose.header.frame_id = "map"
         self.target_pose.pose.position.x = 0.0
         self.target_pose.pose.position.y = 0.0
-        self.target_pose.pose.position.z = 3.0
+        self.target_pose.pose.position.z = 1.5
 
         self.armed = False
         self.offboard_mode_set = False
         self.setpoint_sent = 0
 
-        self.timer = self.create_timer(0.05, self.timer_callback)
+        self.timer = self.create_timer(0.01, self.timer_callback)
 
     def timer_callback(self):
         self.target_pose.header.stamp = self.get_clock().now().to_msg()

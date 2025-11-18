@@ -33,5 +33,8 @@ setup(
         'console_scripts': [
             'rl_node = drone_slam.rl_node:main',
         ],
+        'console_scripts': [
+            'rc_trigger = drone_slam.rc_trigger:main',
+        ],
     },
 )

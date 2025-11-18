@@ -10,29 +10,49 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
+from px4_ros_com.frame_transforms import enu_to_ned_local_frame, ned_to_enu_local_frame
+from px4_msgs.msg import TrajectorySetpoint
+import asyncio
+import threading
+from mavsdk import System
+
 import numpy as np
 import time
 
 # RL 라이브러리
-import gym
+#import gymnasium as gym
 import stable_baselines3 as sb3
 
 class RLDroneFollowerNode(Node):
     def __init__(self):
         super().__init__('rl_node')
+        self.utility = Utility()
 
-        self.takeoff_done = False #이륙 했을때만 동작
+        self.takeoff_done = False #이륙 했을때만 동작 
         self.takeoff_time = None
 
-        # 고정 목적지 (예: 미리 지정된 고정 위치)
-        self.target_position = np.array([10.0, 15.0, 3.0])  # ENU 좌표계
+        self.waypoints = []
+        self.waypoints_ready = threading.Event()
+        self.waypoints = []
+
+        # Waypoint 다운로드 (Geodetic 좌표)
+        self.waypoint_thread = threading.Thread(target=self._download_waypoints)
+        self.waypoint_thread.start()
+
+        if not self.waypoints_ready.wait(timeout=10.0):
+            self.get_logger().error("Waypoint download timeout!")
+            self.ref_lat, self.ref_lon, self.ref_alt = 47.3979709, 8.5461635, 2.0
+            self.target_position = np.array([0.0, 0.0, 2.0])
+        else:
+            # Waypoint 초기화
+            self._initialize_waypoints()
 
         self.lidar_ranges = np.full(36, 20.0, dtype=np.float32)
         
         # subscriber: follower drone odom (ENU 좌표)
         self.subscription = self.create_subscription(
             Odometry,
-            '/odom',
+            '/mavros/odometry/in',
             self.odom_callback,
             10)
 
@@ -40,16 +60,72 @@ class RLDroneFollowerNode(Node):
             LaserScan, '/scan', self.lidar_callback, 10)
 
         # publisher: 목표 좌표 (RL에서 생성된 좌표)
-        self.goal_pub = self.create_publisher(PoseStamped, '/goal_pose', 10)
+        self.goal_pub = self.create_publisher(PoseStamped, '/rl/goal_position', 10)
 
-        # RL 모델 로드 (PyTorch SAC 모델 가정)
+        # RL 모델 로드
         self.rl_model = self.load_rl_model()
 
         # follower 현재 상태 저장 변수
         self.current_state = None
+        self.action = None
+
+    def _download_waypoints(self):
+        """별도 스레드에서 MAVSDK 실행"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self.waypoints = loop.run_until_complete(self.get_waypoints())
+            loop.close()
+            self.get_logger().info(f"Waypoints downloaded: {len(self.waypoints)}")
+        except Exception as e:
+            self.get_logger().error(f"Waypoint download failed: {e}")
+            self.waypoints = []
+        finally:
+            self.waypoints_ready.set()
+
+    def _initialize_waypoints(self):
+        """Waypoint 기반 초기화 (동기화 완료 후 호출)"""
+        if len(self.waypoints) > 0:
+            self.ref_lat, self.ref_lon, self.ref_alt = self.waypoints[0]
+            self.get_logger().info(
+                f"Reference point: {self.ref_lat}, {self.ref_lon}, {self.ref_alt}")
+            
+            if len(self.waypoints) > 1:
+                target_lat, target_lon, target_alt = self.waypoints[1]
+                self.target_position = self.utility.ecef_to_enu(
+                    self.ref_lat, self.ref_lon, self.ref_alt,
+                    target_lat, target_lon, target_alt
+                )
+                self.get_logger().info(f"Target ENU: {self.target_position}")
+            else:
+                self.get_logger().error("Not enough waypoints!")
+                self.target_position = np.array([0.0, 0.0, 2.0])
+        else:
+            self.get_logger().error("No waypoints available!")
+            self.ref_lat, self.ref_lon, self.ref_alt = 47.3979709, 8.5461635, 2.0
+            self.target_position = np.array([0.0, 0.0, 2.0])
+        
+    async def get_waypoints(self):
+        drone = System()
+        await drone.connect(system_address="udp://:14540")
+
+        # 미션 다운로드
+        mission_items = await drone.mission.download_mission()
+    
+        waypoints = []
+        for idx, item in enumerate(mission_items.mission_items):
+            lat = item.latitude_deg
+            lon = item.longitude_deg
+            alt = item.relative_altitude_m
+            waypoints.append((lat, lon, alt))
+            print(f"Waypoint {idx} : {lat}, {lon}, {alt}")
+
+        return waypoints
 
     def load_rl_model(self):
-        model = sb3.SAC.load('/home/sqplab/ws_ros2/src/drone_slam/drone_slam/model.zip')
+        model = sb3.SAC.load(
+        	'/home/sqplab/ws_ros2/src/SQPLab-UAV/drone_slam/model.zip'
+        	)
         self.get_logger().info("RL 모델 연결")
         self.max_steps = 500000
         self.step_count = 0
@@ -70,7 +146,6 @@ class RLDroneFollowerNode(Node):
         state = np.concatenate([self.lidar_ranges, [clipped_dist], [dx, dy]]).astype(np.float32)
 
         self.current_state = state
-
         self.current_pos = np.array([pos.x, pos.y, pos.z], dtype=np.float32)
 
         # 이륙 완료 시점 판단
@@ -78,17 +153,15 @@ class RLDroneFollowerNode(Node):
             self.takeoff_time = self.get_clock().now().nanoseconds
             self.takeoff_done = False
             self.get_logger().info("이륙 대기 시작")
-        elapsed_time = (self.get_clock().now().nanoseconds - self.takeoff_time) / 1e9
-        if self.check_takeoff_stable(msg):
+            
+        if not self.takeoff_done and self.check_takeoff_stable(msg):
             self.takeoff_done = True
             self.get_logger().info("이륙 완료, RL 컨트롤 시작")
 
         if self.takeoff_done:
             action, _ = self.rl_model.predict(self.current_state, deterministic=True)
             self.action = action
-
             self.step_count += 1
-
             self.infer_and_publish_goal()
 
     def lidar_callback(self, msg: LaserScan):
@@ -110,36 +183,48 @@ class RLDroneFollowerNode(Node):
 
         self.lidar_ranges = sector_min_ranges
 
+    def enu_to_ned_position(self, enu_pos):
+        """
+        ENU 절대 위치를 NED 절대 위치로 변환
+        PX4 공식 문서 기준: 
+        - ENU: X(East), Y(North), Z(Up)
+        - NED: X(North), Y(East), Z(Down)
+        """
+        return np.array([
+            enu_pos[1],   # North = ENU_Y
+            enu_pos[0],   # East = ENU_X
+            -enu_pos[2]   # Down = -ENU_Z
+        ])
+
     def infer_and_publish_goal(self):
         if self.current_state is None or self.action is None:
             return
+        
+        # 0. Action 범위 제한 (±2m/step)
+        MAX_DISPLACEMENT = 2.0
+        dx = np.clip(self.action[0], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
+        dy = np.clip(self.action[1], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
 
-        # action이 (dx, dy) 형태라면 z 좌표는 상태 그대로 유지
-        goal_x = self.current_pos[0] + self.action[0]
-        goal_y = self.current_pos[1] + self.action[1]
-        goal_z = self.current_pos[2]  # 필요 시 action으로 조정 가능
+        # ENU 좌표계에서 목표 위치 계산
+        goal_enu = np.array([
+            self.current_pos[0] + dx,
+            self.current_pos[1] + dy,
+            self.current_pos[2]  # 고도 유지
+        ])
 
-
-        goal_pos = np.array([goal_x, goal_y, goal_z])
-
+        # 상위 목표 발행 (ENU 좌표)
         goal_msg = PoseStamped()
         goal_msg.header.stamp = self.get_clock().now().to_msg()
-        goal_msg.header.frame_id = 'odom'
-
-        goal_msg.pose.position.x = float(goal_pos[0])
-        goal_msg.pose.position.y = float(goal_pos[1])
-        goal_msg.pose.position.z = float(goal_pos[2])
-
-        goal_msg.pose.orientation.w = 1.0
-        goal_msg.pose.orientation.x = 0.0
-        goal_msg.pose.orientation.y = 0.0
-        goal_msg.pose.orientation.z = 0.0
-
+        goal_msg.header.frame_id = "map"
+        goal_msg.pose.position.x = float(goal_enu[0])
+        goal_msg.pose.position.y = float(goal_enu[1])
+        goal_msg.pose.position.z = float(goal_enu[2])
+        
         self.goal_pub.publish(goal_msg)
 
     def check_takeoff_stable(self, odom_msg):
         # 목표 이륙 고도
-        TARGET_ALTITUDE = 3.0   # meters
+        TARGET_ALTITUDE = 1.5   # meters
 
         # 고도 허용 오차
         ALTITUDE_TOLERANCE = 0.3
@@ -206,8 +291,78 @@ class RLDroneFollowerNode(Node):
         yaw = math.atan2(siny_cosp, cosy_cosp)
 
         return roll, pitch, yaw
+    
+
+    def __del__(self):
+        """노드 소멸 시 리소스 정리"""
+        if hasattr(self, 'waypoint_thread'):
+            self.waypoint_thread.join(timeout=5.0)
 
 
+class Utility:
+    # WGS84 상수
+    a = 6378137.0          # 지구 장반경 [m]
+    f = 1 / 298.257223563  # 편평률
+    e_sq = f * (2 - f)     # 이심률 제곱
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def geodetic_to_ecef(cls, lat, lon, alt):
+        """
+        WGS84 geodetic 좌표를 ECEF 좌표로 변환
+        
+        Args:
+            lat: 위도 (degrees)
+            lon: 경도 (degrees)
+            alt: 고도 (meters)
+        
+        Returns:
+            ECEF 좌표 [x, y, z] (meters)
+        """
+        lat_rad = np.radians(lat)
+        lon_rad = np.radians(lon)
+
+        N = cls.a / np.sqrt(1 - cls.e_sq * np.sin(lat_rad)**2)
+        
+        x = (N + alt) * np.cos(lat_rad) * np.cos(lon_rad)
+        y = (N + alt) * np.cos(lat_rad) * np.sin(lon_rad)
+        z = ((1 - cls.e_sq) * N + alt) * np.sin(lat_rad)
+        
+        return np.array([x, y, z])
+
+    @classmethod
+    def ecef_to_enu(cls, lat_ref, lon_ref, alt_ref, lat, lon, alt):
+        """
+        ECEF 좌표를 ENU 좌표로 변환
+        
+        Args:
+            lat_ref, lon_ref, alt_ref: 기준점의 geodetic 좌표 (degrees, meters)
+            lat, lon, alt: 변환할 점의 geodetic 좌표 (degrees, meters)
+        
+        Returns:
+            ENU 좌표 [east, north, up] (meters)
+        """
+        # Geodetic -> ECEF 변환
+        ref_ecef = cls.geodetic_to_ecef(lat_ref, lon_ref, alt_ref)
+        target_ecef = cls.geodetic_to_ecef(lat, lon, alt)
+        
+        # ECEF 차이 벡터
+        diff = target_ecef - ref_ecef
+
+        # ENU 회전 행렬
+        lat_rad = np.radians(lat_ref)
+        lon_rad = np.radians(lon_ref)
+        
+        R = np.array([
+            [-np.sin(lon_rad), np.cos(lon_rad), 0],
+            [-np.sin(lat_rad)*np.cos(lon_rad), -np.sin(lat_rad)*np.sin(lon_rad), np.cos(lat_rad)],
+            [np.cos(lat_rad)*np.cos(lon_rad), np.cos(lat_rad)*np.sin(lon_rad), np.sin(lat_rad)]
+        ])
+
+        enu = R @ diff
+        return enu  # [east, north, up]
 
 
 def main(args=None):

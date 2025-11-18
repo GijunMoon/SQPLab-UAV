@@ -5,46 +5,48 @@ from launch.actions import ExecuteProcess
 
 def generate_launch_description():
     return LaunchDescription([
-        # 1) Global sim time
-        SetParameter(name='use_sim_time', value=True),
-
-        # 2) Bridge Gazebo /clock -> ROS
-        Node(
-            package='ros_gz_bridge',
-            executable='parameter_bridge',
-            arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
-            output='screen'
-        ),
+        SetParameter(name='use_sim_time', value=False),
 
         # 3) Lidar bridge
         Node(
-            package='ros_gz_bridge',
-            executable='parameter_bridge',
-            arguments=['/world/walls/model/x500_lidar_2d_0/link/link/sensor/lidar_2d_v2/scan@sensor_msgs/msg/LaserScan@gz.msgs.LaserScan'],
-            ros_arguments=['-r', '/world/walls/model/x500_lidar_2d_0/link/link/sensor/lidar_2d_v2/scan:=/scan'],
-            output='screen'
-        ),
-
-        # 4) Odom converter
-        ExecuteProcess(
-            cmd=['python3', os.path.expanduser('~/ws_ros2/src/drone_slam/drone_slam/odom_converter.py')],
-            output='screen'
-        ),
-
-        # 5) Static TF base_link -> link
+            package='sllidar_ros2',
+            executable='sllidar_node',
+            name='sllidar_node',
+            parameters=[{'channel_type':'serial',
+                         'serial_port': '/dev/ttyUSB0', 
+                         'serial_baudrate': 256000, 
+                         'frame_id': 'laser',
+                         'scan_mode': 'Sensitivity'}],
+            output='screen'),
+            
+        Node(
+            package='mavros',
+            executable='mavros_node',
+            parameters=[{'fcu_url':'serial:///dev/ttyACM0:921600', }],
+            output='screen'),
+            
+        
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0.26', '0', '0', '0', 'base_link', 'link'],
+            arguments=['0', '0', '0.1', '0', '0', '0', 'base_link', 'laser'],
             output='screen'
         ),
+        
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=['0', '0', '0.26', '0', '0', '0', 'odom', 'base_link'],
+            output='screen'
+        ),
+
 
         # 6) SLAM Toolbox
         Node(
             package='slam_toolbox',
             executable='async_slam_toolbox_node',
             name='slam_toolbox',
-            parameters=[os.path.expanduser('~/ws_ros2/src/drone_slam/config/slam_params.yaml')],
+            parameters=[os.path.expanduser('~/ws_ros2/src/SQPLab-UAV/config/slam_params.yaml')],
             output='screen'
         ),
 
@@ -75,7 +77,13 @@ def generate_launch_description():
 
         # 10) RL Node
         ExecuteProcess(
-            cmd=['python3', os.path.expanduser('~/ws_ros2/src/drone_slam/drone_slam/rl_node.py')],
+            cmd=['python3', os.path.expanduser('~/ws_ros2/src/SQPLab-UAV/drone_slam/rl_node.py')],
+            output='screen'
+        ),
+        
+        # 11) RC Node
+        ExecuteProcess(
+            cmd=['python3', os.path.expanduser('~/ws_ros2/src/SQPLab-UAV/drone_slam/rc_trigger.py')],
             output='screen'
         ),
     ])
