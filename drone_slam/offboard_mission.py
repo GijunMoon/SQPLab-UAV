@@ -1,6 +1,6 @@
 # ==============================
 # Author: sqplab
-# Date: 2025-09-23
+# Date: 2025-11-19
 # Description: 드론 오프보드 제어 노드
 # ==============================
 
@@ -20,19 +20,19 @@ class OffboardTakeoffNode(Node):
 
         # RL output 입력 받을 goal_pose
         self.subscription = self.create_subscription(
-            PoseStamped, '/rl/goal_position', self.goal_pose_callback, 10)
+            PoseStamped, '/goal', self.goal_pose_callback, 10)
 
         self.target_pose = PoseStamped()
         self.target_pose.header.frame_id = "map"
         self.target_pose.pose.position.x = 0.0
         self.target_pose.pose.position.y = 0.0
-        self.target_pose.pose.position.z = 1.5
+        self.target_pose.pose.position.z = 2.5
 
         self.armed = False
         self.offboard_mode_set = False
         self.setpoint_sent = 0
 
-        self.timer = self.create_timer(0.01, self.timer_callback)
+        self.timer = self.create_timer(0.05, self.timer_callback)
 
     def timer_callback(self):
         self.target_pose.header.stamp = self.get_clock().now().to_msg()

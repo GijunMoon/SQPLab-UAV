@@ -1,6 +1,6 @@
 # ==============================
 # Author: sqplab
-# Date: 2025-09-23
+# Date: 2025-11-19
 # Description: RL 기반 드론 제어 노드
 # ==============================
 
@@ -10,11 +10,10 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
-from px4_ros_com.frame_transforms import enu_to_ned_local_frame, ned_to_enu_local_frame
-from px4_msgs.msg import TrajectorySetpoint
-import asyncio
-import threading
-from mavsdk import System
+
+from mavros_msgs.srv import WaypointPull
+from mavros_msgs.msg import WaypointList
+from rclpy.qos import QoSDurabilityPolicy
 
 import numpy as np
 import time
@@ -28,23 +27,20 @@ class RLDroneFollowerNode(Node):
         super().__init__('rl_node')
         self.utility = Utility()
 
-        self.takeoff_done = False #이륙 했을때만 동작 
+        self.takeoff_done = True #이륙 했을때만 동작 
         self.takeoff_time = None
 
-        self.waypoints = []
-        self.waypoints_ready = threading.Event()
+        self.initial_position = None
+        self.target_position = None  # Waypoint의 절대 좌표
+
+        self.get_logger().info("Waypoint 가져오기...")
         self.waypoints = []
 
-        # Waypoint 다운로드 (Geodetic 좌표)
-        self.waypoint_thread = threading.Thread(target=self._download_waypoints)
-        self.waypoint_thread.start()
-
-        if not self.waypoints_ready.wait(timeout=10.0):
-            self.get_logger().error("Waypoint download timeout!")
-            self.ref_lat, self.ref_lon, self.ref_alt = 47.3979709, 8.5461635, 2.0
-            self.target_position = np.array([0.0, 0.0, 2.0])
+        self._get_waypoints_from_mavros()
+        if not self.waypoints or len(self.waypoints) < 2:
+            self.get_logger().error("Waypoint 부족! 기본값 사용")
+            self.target_position = np.array([10.0, 10.0, 3.0])
         else:
-            # Waypoint 초기화
             self._initialize_waypoints()
 
         self.lidar_ranges = np.full(36, 20.0, dtype=np.float32)
@@ -60,7 +56,7 @@ class RLDroneFollowerNode(Node):
             LaserScan, '/scan', self.lidar_callback, 10)
 
         # publisher: 목표 좌표 (RL에서 생성된 좌표)
-        self.goal_pub = self.create_publisher(PoseStamped, '/rl/goal_position', 10)
+        self.goal_pub = self.create_publisher(PoseStamped, '/goal', 10)
 
         # RL 모델 로드
         self.rl_model = self.load_rl_model()
@@ -69,62 +65,175 @@ class RLDroneFollowerNode(Node):
         self.current_state = None
         self.action = None
 
-    def _download_waypoints(self):
-        """별도 스레드에서 MAVSDK 실행"""
+    def _get_waypoints_from_mavros(self):
+        """MAVROS를 통한 Waypoint 가져오기"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            self.waypoints = loop.run_until_complete(self.get_waypoints())
-            loop.close()
-            self.get_logger().info(f"Waypoints downloaded: {len(self.waypoints)}")
+            # Waypoint Pull 서비스 클라이언트
+            cli = self.create_client(WaypointPull, '/mavros/mission/pull')
+        
+            self.get_logger().info("MAVROS mission service 대기 중...")
+        
+            if not cli.wait_for_service(timeout_sec=5.0):
+                self.get_logger().error("MAVROS mission service 사용 불가")
+                return
+        
+            self.get_logger().info("MAVROS mission service 연결됨")
+        
+            # Waypoint 다운로드 요청
+            req = WaypointPull.Request()
+            future = cli.call_async(req)
+        
+            # 응답 대기
+            rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+        
+            if future.result() is not None and future.result().success:
+                wp_count = future.result().wp_received
+                self.get_logger().info(f"MAVROS waypoints pulled: {wp_count}개")
+        
+                time.sleep(1.0)
+        
+                self._fetch_waypoint_list_sync()
+            else:
+                self.get_logger().error("Waypoint pull 실패")
+    
         except Exception as e:
-            self.get_logger().error(f"Waypoint download failed: {e}")
+            self.get_logger().error(f"MAVROS waypoint 오류: {e}")
+
+    def _fetch_waypoint_list_sync(self):
+        """MAVROS Waypoint 리스트 동기 방식으로 가져오기"""
+        try:
+            from rclpy.qos import QoSProfile, QoSReliabilityPolicy
+        
+            qos = QoSProfile(
+                depth=10,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
+            )
+
+            msg = None
+        
+            def callback(data):
+                nonlocal msg
+                msg = data
+        
+            # 임시 구독
+            sub = self.create_subscription(
+                WaypointList,
+                '/mavros/mission/waypoints',
+                callback,
+                qos
+            )
+        
+            # 메시지 수신 대기 (최대 3초)
+            timeout = 3.0
+            start_time = time.time()
+        
+            while msg is None and (time.time() - start_time) < timeout:
+                rclpy.spin_once(self, timeout_sec=0.1)
+        
+            # 구독 해제
+            self.destroy_subscription(sub)
+        
+            if msg is None:
+                self.get_logger().error("Waypoint 리스트 수신 타임아웃")
+                return
+        
+            # Waypoint 처리
             self.waypoints = []
-        finally:
-            self.waypoints_ready.set()
+        
+            if not msg.waypoints:
+                self.get_logger().warn("Waypoint 리스트가 비어있습니다")
+                return
+        
+            for idx, wp in enumerate(msg.waypoints):
+                lat = wp.x_lat
+                lon = wp.y_long
+                alt = wp.z_alt
+            
+                self.waypoints.append((lat, lon, alt))
+                self.get_logger().info(
+                    f"Waypoint {idx}: lat={lat:.6f}, lon={lon:.6f}, alt={alt:.2f}"
+                )
+        
+            self.get_logger().info(f"총 {len(self.waypoints)}개 waypoint 로드됨")
+    
+        except Exception as e:
+            self.get_logger().error(f"Waypoint 리스트 가져오기 실패: {e}")
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+
+    
+    def _subscribe_waypoint_list(self):
+        """MAVROS Waypoint 리스트 구독"""
+        def waypoint_callback(msg):
+            self.waypoints = []
+            for wp in msg.waypoints:
+                # WGS84 좌표
+                lat = wp.x_lat
+                lon = wp.y_long
+                alt = wp.z_alt
+                self.waypoints.append((lat, lon, alt))
+                self.get_logger().info(f"WP: {lat:.6f}, {lon:.6f}, {alt:.2f}")
+            
+            # Waypoint 초기화
+            if len(self.waypoints) >= 2:
+                self._initialize_waypoints()
+        
+        self.create_subscription(
+            WaypointList, 
+            '/mavros/mission/waypoints', 
+            waypoint_callback, 
+            10
+        )
 
     def _initialize_waypoints(self):
-        """Waypoint 기반 초기화 (동기화 완료 후 호출)"""
-        if len(self.waypoints) > 0:
+        """Waypoint 기반 초기화"""
+        self.get_logger().info(f"_initialize_waypoints 호출: {len(self.waypoints)}개")
+    
+        if not self.waypoints or len(self.waypoints) < 2:
+            self.get_logger().error(
+                f"Waypoint 부족! (현재: {len(self.waypoints)}, 필요: 2)"
+            )
+            self.target_position = np.array([10.0, 10.0, 3.0])
+            return
+    
+        try:
+            # Waypoint 1: 기준점
             self.ref_lat, self.ref_lon, self.ref_alt = self.waypoints[0]
             self.get_logger().info(
-                f"Reference point: {self.ref_lat}, {self.ref_lon}, {self.ref_alt}")
-            
-            if len(self.waypoints) > 1:
-                target_lat, target_lon, target_alt = self.waypoints[1]
-                self.target_position = self.utility.ecef_to_enu(
-                    self.ref_lat, self.ref_lon, self.ref_alt,
-                    target_lat, target_lon, target_alt
-                )
-                self.get_logger().info(f"Target ENU: {self.target_position}")
-            else:
-                self.get_logger().error("Not enough waypoints!")
-                self.target_position = np.array([0.0, 0.0, 2.0])
-        else:
-            self.get_logger().error("No waypoints available!")
-            self.ref_lat, self.ref_lon, self.ref_alt = 47.3979709, 8.5461635, 2.0
-            self.target_position = np.array([0.0, 0.0, 2.0])
+                f"Reference (WP1): {self.ref_lat:.6f}, {self.ref_lon:.6f}, {self.ref_alt:.2f}"
+            )
         
-    async def get_waypoints(self):
-        drone = System()
-        await drone.connect(system_address="udp://:14540")
-
-        # 미션 다운로드
-        mission_items = await drone.mission.download_mission()
+            # Waypoint 2: 목표점
+            target_lat, target_lon, target_alt = self.waypoints[1]
+            self.get_logger().info(
+                f"Target (WP2): {target_lat:.6f}, {target_lon:.6f}, {target_alt:.2f}"
+            )
+        
+            self.target_position = self.utility.ecef_to_enu(
+                self.ref_lat, self.ref_lon, self.ref_alt,
+                target_lat, target_lon, target_alt
+            )
+        
+            if self.target_position is None:
+                raise ValueError("ecef_to_enu returned None")
+        
+            self.get_logger().info(
+                f"Target ENU: x={self.target_position[0]:.2f}, "
+                f"y={self.target_position[1]:.2f}, "
+                f"z={self.target_position[2]:.2f}"
+            )
     
-        waypoints = []
-        for idx, item in enumerate(mission_items.mission_items):
-            lat = item.latitude_deg
-            lon = item.longitude_deg
-            alt = item.relative_altitude_m
-            waypoints.append((lat, lon, alt))
-            print(f"Waypoint {idx} : {lat}, {lon}, {alt}")
+        except Exception as e:
+            self.get_logger().error(f"Waypoint 변환 실패: {e}")
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+            self.target_position = np.array([10.0, 10.0, 3.0])
 
-        return waypoints
 
     def load_rl_model(self):
         model = sb3.SAC.load(
-        	'/home/sqplab/ws_ros2/src/SQPLab-UAV/drone_slam/model.zip'
+        	'/home/sqplab/ws_ros2/src/drone_slam/drone_slam/model'
         	)
         self.get_logger().info("RL 모델 연결")
         self.max_steps = 500000
@@ -137,10 +246,17 @@ class RLDroneFollowerNode(Node):
         pos = msg.pose.pose.position
         vel = msg.twist.twist.linear
 
+        if self.initial_position is None:
+            self.initial_position = np.array([pos.x, pos.y, pos.z])
+            self.get_logger().info(f"Initial odom position: {self.initial_position}")
+        
+        current_pos = np.array([pos.x, pos.y, pos.z])
+        relative_pos = current_pos - self.initial_position
+
         # dx, dy, dz: 목적지까지 상대 위치
-        dx = self.target_position[0] - pos.x
-        dy = self.target_position[1] - pos.y
-        dz = self.target_position[2] - pos.z
+        dx = self.target_position[0] - relative_pos[0]
+        dy = self.target_position[1] - relative_pos[1]
+        dz = self.target_position[2] - relative_pos[2]
 
         clipped_dist = np.clip(np.linalg.norm([dx, dy]), 0.0, 30.0)
         state = np.concatenate([self.lidar_ranges, [clipped_dist], [dx, dy]]).astype(np.float32)
@@ -199,32 +315,38 @@ class RLDroneFollowerNode(Node):
     def infer_and_publish_goal(self):
         if self.current_state is None or self.action is None:
             return
-        
-        # 0. Action 범위 제한 (±2m/step)
+    
+        # Action 범위 제한
         MAX_DISPLACEMENT = 2.0
         dx = np.clip(self.action[0], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
         dy = np.clip(self.action[1], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
-
-        # ENU 좌표계에서 목표 위치 계산
-        goal_enu = np.array([
-            self.current_pos[0] + dx,
-            self.current_pos[1] + dy,
-            self.current_pos[2]  # 고도 유지
-        ])
-
-        # 상위 목표 발행 (ENU 좌표)
+    
+        # ENU 좌표계에서 목표 위치 계산 (변환 불필요)
+        goal_enu_x = float(self.current_pos[0] + dx)
+        goal_enu_y = float(self.current_pos[1] + dy)
+        goal_enu_z = float(self.current_pos[2])  # 고도 유지
+    
+        # PoseStamped 메시지 생성
         goal_msg = PoseStamped()
         goal_msg.header.stamp = self.get_clock().now().to_msg()
-        goal_msg.header.frame_id = "map"
-        goal_msg.pose.position.x = float(goal_enu[0])
-        goal_msg.pose.position.y = float(goal_enu[1])
-        goal_msg.pose.position.z = float(goal_enu[2])
-        
+        goal_msg.header.frame_id = "map"  # 또는 "odom"
+    
+        goal_msg.pose.position.x = goal_enu_x
+        goal_msg.pose.position.y = goal_enu_y
+        goal_msg.pose.position.z = goal_enu_z
+    
+        # 방향은 기본값 (identity quaternion)
+        goal_msg.pose.orientation.w = 1.0
+        goal_msg.pose.orientation.x = 0.0
+        goal_msg.pose.orientation.y = 0.0
+        goal_msg.pose.orientation.z = 0.0
+    
         self.goal_pub.publish(goal_msg)
+
 
     def check_takeoff_stable(self, odom_msg):
         # 목표 이륙 고도
-        TARGET_ALTITUDE = 1.5   # meters
+        TARGET_ALTITUDE = 2.5   # meters
 
         # 고도 허용 오차
         ALTITUDE_TOLERANCE = 0.3
