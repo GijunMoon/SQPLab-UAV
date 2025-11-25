@@ -7,6 +7,7 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Bool, String
 from mavros_msgs.srv import CommandBool, SetMode
 import time
 
@@ -20,7 +21,7 @@ class OffboardTakeoffNode(Node):
 
         # RL output 입력 받을 goal_pose
         self.subscription = self.create_subscription(
-            PoseStamped, '/goal_pose', self.goal_pose_callback, 10)
+            PoseStamped, '/goal', self.goal_pose_callback, 10)
 
         self.target_pose = PoseStamped()
         self.target_pose.pose.position.x = 0.0
@@ -30,6 +31,12 @@ class OffboardTakeoffNode(Node):
         self.armed = False
         self.offboard_mode_set = False
         self.setpoint_sent = 0
+
+        # 사람 감지 구독
+        self.subscription_human = self.create_subscription(
+            Bool, '/human_detected', self.human_callback, 10)
+        
+        self.is_holding = False
 
         self.timer = self.create_timer(0.05, self.timer_callback)
 
@@ -85,6 +92,27 @@ class OffboardTakeoffNode(Node):
                 self.get_logger().warn("오프보드 모드 진입 실패, 재시도 중...")
         except Exception as e:
             self.get_logger().error(f"오프보드 서비스 예외: {e}")
+
+    def human_callback(self, msg):
+        """사람 감지 시 Hold 모드로 전환"""
+        if msg.data and not self.is_holding:
+            # Hold 모드로 전환 (현재 위치에서 정지)
+            self.set_hold_mode()
+            self.is_holding = True
+            self.get_logger().warn("Hold 모드 활성화")
+        
+        elif not msg.data and self.is_holding:
+            # Offboard 모드로 복귀
+            self.set_offboard_mode()
+            self.is_holding = False
+            self.get_logger().info("Offboard 모드 복귀")
+    
+    def set_hold_mode(self):
+        """PX4 Hold 모드 설정"""
+        if self.mode_client.service_is_ready():
+            req = SetMode.Request()
+            req.custom_mode = 'AUTO.LOITER'  # Hold 모드
+            self.mode_client.call_async(req)
 
 def main(args=None):
     rclpy.init(args=args)
