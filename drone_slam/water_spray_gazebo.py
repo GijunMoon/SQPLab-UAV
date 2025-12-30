@@ -8,10 +8,12 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool
+from ros_gz_interfaces.msg import Entity
 from ros_gz_interfaces.srv import SpawnEntity, DeleteEntity
 from nav_msgs.msg import Odometry
 import numpy as np
 import time
+import Jetson.GPIO as GPIO
 
 
 class WaterSprayGazeboNode(Node):
@@ -34,6 +36,9 @@ class WaterSprayGazeboNode(Node):
             SpawnEntity, '/world/walls/create')
         self.delete_client = self.create_client(
             DeleteEntity, '/world/walls/remove')
+
+        while not self.delete_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('delete_entity 서비스 대기 중...')
         
         # Wait for services
         while not self.spawn_client.wait_for_service(timeout_sec=1.0):
@@ -136,13 +141,45 @@ class WaterSprayGazeboNode(Node):
       for drop in self.spawned_drops:
           if current_time - drop['time'] > 2.0:
               req = DeleteEntity.Request()
-              req.name = drop['name']        # 직접 할당
-              req.type = DeleteEntity.Request.MODEL  # 모델 삭제
-              self.delete_client.call_async(req)
+              req.entity.name = drop['name']        # 직접 할당
+              req.entity.type = Entity.MODEL   # 모델 삭제
+              future = self.delete_client.call_async(req)
               drops_to_remove.append(drop)
       for drop in drops_to_remove:
           self.spawned_drops.remove(drop)
 
+class WaterSprayHardwareNode(Node):
+    def __init__(self):
+        super().__init__('water_spray_hardware')
+        
+        self.spraying = False
+        self.RELAY_PIN = 7
+
+        GPIO.setmode(GPIO.BOARD) # 초기 설정
+        GPIO.setup(self.RELAY_PIN, GPIO.OUT, initial=GPIO.LOW)
+        
+        # Subscriber
+        self.spray_sub = self.create_subscription(
+            Bool, '/water_spray', self.spray_callback, 10)
+        
+        self.get_logger().info("Water Spray Hardware 시작")
+    
+    def spray_callback(self, msg):
+        self.spraying = msg.data
+        if self.spraying:
+            self.activate_pump()
+        else:
+            self.deactivate_pump()
+    
+    def activate_pump(self):
+        # 실제 하드웨어 제어 코드로 대체 필요
+        self.get_logger().info("워터 펌프 활성화")
+        GPIO.output(self.RELAY_PIN, GPIO.HIGH)
+    
+    def deactivate_pump(self):
+        # 실제 하드웨어 제어 코드로 대체 필요
+        self.get_logger().info("워터 펌프 비활성화")
+        GPIO.output(self.RELAY_PIN, GPIO.LOW)
 
 def main(args=None):
     rclpy.init(args=args)

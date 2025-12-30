@@ -41,15 +41,12 @@ class RLDroneFollowerNode(Node):
         self.waypoints = []
 
         # 사람 감지 상태 구독
-        self.human_detected = False
-        self.hover_position = None  # 호버링 위치 저장
+        self.rescue_active = False  # 구조 동작 활성화 여부
+        self.create_subscription(Bool, '/rescue_mode', self.rescue_mode_callback, 10)
 
-        """self.subscription_human = self.create_subscription(
-            Bool,
-            '/human_detected',
-            self.human_detection_callback,
-            10
-        )"""
+        self.subscription_human = self.create_subscription(
+            Bool, '/human_detected', self.human_detection_callback, 10)
+        self.human_detected = False
 
         self.alert_pub = self.create_publisher(String, '/alert', 10)
 
@@ -210,6 +207,8 @@ class RLDroneFollowerNode(Node):
     def _initialize_waypoints(self):
         """Waypoint 기반 초기화"""
         self.get_logger().info(f"_initialize_waypoints 호출: {len(self.waypoints)}개")
+
+        self.current_wp_index = 1
     
         if not self.waypoints or len(self.waypoints) < 2:
             self.get_logger().error(
@@ -244,12 +243,27 @@ class RLDroneFollowerNode(Node):
                 f"y={self.target_position[1]:.2f}, "
                 f"z={self.target_position[2]:.2f}"
             )
+
+            self.update_target_position()
     
         except Exception as e:
             self.get_logger().error(f"Waypoint 변환 실패: {e}")
             import traceback
             self.get_logger().error(traceback.format_exc())
             self.target_position = np.array([10.0, 10.0, 3.0])
+
+    def update_target_position(self):
+        if self.current_wp_index < len(self.waypoints):
+            lat, lon, alt = self.waypoints[self.current_wp_index]
+            self.target_position = self.utility.ecef_to_enu(
+                self.ref_lat, self.ref_lon, self.ref_alt,
+                lat, lon, alt
+            )
+            self.get_logger().info(f"다음 waypoint 설정: #{self.current_wp_index}")
+        else:
+            self.get_logger().info("모든 waypoint 완료")
+            self.target_position = None
+
 
 
     def load_rl_model(self):
@@ -261,10 +275,15 @@ class RLDroneFollowerNode(Node):
         self.step_count = 0
         return model
 
+    def rescue_mode_callback(self, msg):
+        self.rescueactive = msg.data
+        if self.rescueactive:
+            self.humandetected = False  # 강제 리셋
+
 
     def odom_callback(self, msg):
-        if self.human_detected:
-            # RL 제어 스킵, 또는 구조/수동 신호만 유지
+        if self.rescue_active:  # 구조 중 RL 완전 중단
+            self.action = np.array([0.0, 0.0])
             return
         # 현재 follower 위치, 상태 수신
         pos = msg.pose.pose.position
@@ -297,6 +316,19 @@ class RLDroneFollowerNode(Node):
         if not self.takeoff_done and self.check_takeoff_stable(msg):
             self.takeoff_done = True
             self.get_logger().info("이륙 완료, RL 컨트롤 시작")
+
+
+        dist_xy = np.linalg.norm([dx, dy])
+    
+        if dist_xy < 1.0:
+            self.get_logger().info(f"Waypoint #{self.current_wp_index} 도달")
+            self.current_wp_index += 1
+            if self.current_wp_index < len(self.waypoints):
+                self.update_target_position()
+            else:
+                self.get_logger().info("모든 waypoint 방문 완료. 호버링 모드 돌입")
+                self.action = np.array([0.0, 0.0])
+                return
 
         if self.takeoff_done:
             if self.human_detected:
@@ -358,6 +390,10 @@ class RLDroneFollowerNode(Node):
 
     def infer_and_publish_goal(self):
         if self.current_state is None or self.action is None:
+            return
+
+        if self.rescue_active:
+            # 구조 모드에서는 RL 제어 스킵
             return
     
         # Action 범위 제한

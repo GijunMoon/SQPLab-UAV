@@ -57,6 +57,8 @@ class RescueControllerNode(Node):
             VehicleCommand, '/fmu/in/vehicle_command', qos_profile)
         
         self.spray_pub = self.create_publisher(Bool, '/water_spray', 10)
+
+        self.rescue_mode_pub = self.create_publisher(Bool, '/rescue_mode', 10)
         
         # 타이머
         self.timer = self.create_timer(0.1, self.control_loop)
@@ -74,6 +76,10 @@ class RescueControllerNode(Node):
             self.descending = True
             self.rescue_start_time = self.get_clock().now()
             self.offboard_setpoint_counter = 0
+
+            rescue_msg = Bool()
+            rescue_msg.data = True
+            self.rescue_mode_pub.publish(rescue_msg)
             
             # Offboard 모드 활성화
             self.engage_offboard_mode()
@@ -107,9 +113,9 @@ class RescueControllerNode(Node):
     def control_loop(self):
         if not self.rescue_mode or self.current_position is None:
             return
-        
+    
         current_time = self.get_clock().now()
-        
+    
         # Offboard 모드 유지
         offboard_msg = OffboardControlMode()
         offboard_msg.position = True
@@ -119,71 +125,85 @@ class RescueControllerNode(Node):
         offboard_msg.body_rate = False
         offboard_msg.timestamp = int(current_time.nanoseconds / 1000)
         self.offboard_mode_pub.publish(offboard_msg)
-        
+    
+        if hasattr(self, 'humanposition') and self.humanposition is not None:
+            enux, enuy, enuz = self.humanposition  # ENU 유지
+            targetx = enux  # 직접 ENU 사용
+            targety = enuy
+        else:
+            targetx = float(self.currentposition[0])
+            targety = float(self.currentposition[1])
+
+        # offboard 상태 확인 추가
+        if self.offboardsetpointcounter < 10:  # 1초 대기
+            self.offboardsetpointcounter += 1
+            return
+    
         # 1단계: 하강
         if self.descending:
             target_z = -self.target_rescue_altitude  # NED 좌표계 (음수 = 위)
             current_z = -self.current_position[2]
-            
+        
             self.get_logger().warn(
-                f"⬇하강 중! 현재: {-current_z:.2f}m, 목표: {-target_z:.2f}m"
+                f"하강 중! 현재: {-current_z:.2f}m, 목표: {-target_z:.2f}m"
             )
-            
+        
             if abs(current_z - target_z) < 0.4:
                 self.get_logger().warn("하강 완료! 물뿌리기 시작!")
                 self.descending = False
                 self.hovering = True
                 self.spraying = True
                 self.spray_start_time = current_time
-                
+            
                 spray_msg = Bool()
                 spray_msg.data = True
                 self.spray_pub.publish(spray_msg)
-            
-            # TrajectorySetpoint 발행 (NED 좌표)
+        
             traj = TrajectorySetpoint()
             traj.position = [
-                float(self.current_position[0]),
-                float(self.current_position[1]),
+                float(target_x),
+                float(target_y),
                 target_z
             ]
             traj.yaw = 0.0
             traj.timestamp = int(current_time.nanoseconds / 1000)
             self.trajectory_pub.publish(traj)
-        
+    
         # 2단계: 물뿌리기
         elif self.hovering and self.spraying:
             spray_elapsed = (current_time - self.spray_start_time).nanoseconds / 1e9
-            
-            # 호버링 유지
+        
             traj = TrajectorySetpoint()
             traj.position = [
-                float(self.current_position[0]),
-                float(self.current_position[1]),
+                float(target_x),
+                float(target_y),
                 -self.target_rescue_altitude
             ]
             traj.yaw = 0.0
             traj.timestamp = int(current_time.nanoseconds / 1000)
             self.trajectory_pub.publish(traj)
-            
+        
             if spray_elapsed < self.spray_duration:
                 spray_msg = Bool()
                 spray_msg.data = True
                 self.spray_pub.publish(spray_msg)
-                
+            
                 remaining = self.spray_duration - spray_elapsed
                 self.get_logger().warn(f"물뿌리기 중... ({remaining:.1f}초)")
             else:
                 self.get_logger().warn("구조 완료!")
-                
+            
                 spray_msg = Bool()
                 spray_msg.data = False
                 self.spray_pub.publish(spray_msg)
-                
+
+                rescue_msg = Bool()
+                rescue_msg.data = False
+                self.rescue_mode_pub.publish(rescue_msg)
+            
                 self.spraying = False
                 self.hovering = False
                 self.rescue_mode = False
-
 
 def main(args=None):
     rclpy.init(args=args)

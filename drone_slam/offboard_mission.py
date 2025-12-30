@@ -14,10 +14,15 @@ import time
 class OffboardTakeoffNode(Node):
     def __init__(self):
         super().__init__('offboard_takeoff_node')
+        
 
         self.pose_pub = self.create_publisher(PoseStamped, '/mavros/setpoint_position/local', 10) # 로컬 위치 제어용
         self.arming_client = self.create_client(CommandBool, '/mavros/cmd/arming') # 아밍 서비스 클라이언트
         self.mode_client = self.create_client(SetMode, '/mavros/set_mode') # 모드 변경 서비스 클라이언트
+
+        self.rescue_active = False
+        self.rescue_triggered = False
+        self.create_subscription(Bool, '/rescue_mode', self.rescue_mode_callback, 10)
 
         # RL output 입력 받을 goal_pose
         self.subscription = self.create_subscription(
@@ -41,21 +46,38 @@ class OffboardTakeoffNode(Node):
         self.timer = self.create_timer(0.05, self.timer_callback)
 
     def timer_callback(self):
+
+        self.get_logger().debug(f"Flags: rescue={self.rescue_active}, "
+                       f"holding={self.is_holding}, "
+                       f"triggered={getattr(self, 'rescue_triggered', False)}")
+        
+        if not self.armed:
+            self.arm()
+        elif not self.offboard_mode_set:
+            self.set_offboard_mode()
+
         self.target_pose.header.stamp = self.get_clock().now().to_msg()
         self.pose_pub.publish(self.target_pose)
         if self.setpoint_sent < 40:
             self.setpoint_sent += 1
             return
-        if not self.armed:
-            self.arm()
-        elif not self.offboard_mode_set:
-            self.set_offboard_mode()
+
+        if self.rescue_active or self.rescue_triggered or self.is_holding:
+            # 구조 동작일 때는 구조동작에서 publish하는 setpoint만 따라감
+            self.target_pose.pose.position.x = 0.0
+            self.target_pose.pose.position.y = 0.0
+            self.target_pose.pose.position.z = 3.0
+            self.get_logger().debug("구조 모드: 호버링 유지")
+
 
     def goal_pose_callback(self, msg):
         # RL에서 새로운 목표 위치가 오면 위에 바로 반영
         self.target_pose.pose.position.x = msg.pose.position.x
         self.target_pose.pose.position.y = msg.pose.position.y
         self.target_pose.pose.position.z = msg.pose.position.z
+
+    def rescue_mode_callback(self, msg):
+        self.rescue_active = msg.data
 
     def arm(self):
         if self.arming_client.service_is_ready():
@@ -94,24 +116,13 @@ class OffboardTakeoffNode(Node):
             self.get_logger().error(f"오프보드 서비스 예외: {e}")
 
     def human_callback(self, msg):
-        """사람 감지 시 Hold 모드로 전환"""
-        if msg.data and not self.is_holding:
-            # Hold 모드로 전환 (현재 위치에서 정지)
-            self.set_hold_mode()
-            self.is_holding = True
-            self.get_logger().warn("Hold 모드 활성화")
-        
-        elif not msg.data and self.is_holding:
-            # Offboard 모드로 복귀
-            self.set_offboard_mode()
-            self.is_holding = False
-            self.get_logger().info("Offboard 모드 복귀")
+        pass # 구조 모드 진입은 rescue_controller_node.py에서 처리
     
     def set_hold_mode(self):
         """PX4 Hold 모드 설정"""
         if self.mode_client.service_is_ready():
             req = SetMode.Request()
-            req.custom_mode = 'AUTO.LOITER'  # Hold 모드
+            req.custom_mode = 'LOITER'  # Hold 모드
             self.mode_client.call_async(req)
 
 def main(args=None):

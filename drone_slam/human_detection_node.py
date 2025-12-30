@@ -41,7 +41,7 @@ class HumanDetectionNode(Node):
         # 마지막 사람 감지 시각
         self.last_human_detect_time = None
         # 재탐지 금지 시간
-        self.suppress_duration = 60.0
+        self.suppress_duration = 3.0
         
     def image_callback(self, msg):
         """ROS Image를 직접 NumPy 배열로 변환"""
@@ -96,6 +96,9 @@ class HumanDetectionNode(Node):
             detection_msg = Bool()
             detection_msg.data = human_detected
             self.detection_pub.publish(detection_msg)
+
+            if not human_detected:
+                self.last_human_detect_time = None
             
         except Exception as e:
             self.get_logger().error(f"이미지 처리 오류: {e}")

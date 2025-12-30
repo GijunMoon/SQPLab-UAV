@@ -12,12 +12,12 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # Include all launch files
-        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.launch.py'))),
-        # Include all config files
-        (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
-        # Include all world files
-        (os.path.join('share', package_name, 'worlds'), glob(os.path.join('worlds', '*.sdf'))),
+        (os.path.join('share', package_name, 'launch'), 
+            glob(os.path.join('launch', '*.launch.py'))),
+        (os.path.join('share', package_name, 'config'), 
+            glob(os.path.join('config', '*.yaml'))),
+        (os.path.join('share', package_name, 'worlds'), 
+            glob(os.path.join('worlds', '*.sdf'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -28,10 +28,18 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'odom_converter = drone_slam.odom_converter:main',
-        ],
-        'console_scripts': [
+            # Odom 변환 (Python 우선)
+            'odom_converter_py = drone_slam.odom_converter:main',
+            
+            # 핵심 제어 노드들
+            'human_detection_node = drone_slam.human_detection_node:main',
             'rl_node = drone_slam.rl_node:main',
+            'rescue_controller_node = drone_slam.rescue_controller_node:main',
+            'offboard_mission = drone_slam.offboard_mission:main',
+            'water_spray_gazebo = drone_slam.water_spray_gazebo:main',
+            
+            # 상태 관리자
+            'state_manager = drone_slam.state_manager:main',
         ],
     },
 )
