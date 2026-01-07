@@ -156,7 +156,7 @@ class RLDroneFollowerNode(Node):
                 self.get_logger().error("Waypoint 리스트 수신 타임아웃")
                 return
         
-            # ✅ Waypoint 처리
+            # Waypoint 처리
             self.waypoints = []
         
             if not msg.waypoints:
@@ -282,9 +282,6 @@ class RLDroneFollowerNode(Node):
 
 
     def odom_callback(self, msg):
-        if self.rescue_active:  # 구조 중 RL 완전 중단
-            self.action = np.array([0.0, 0.0])
-            return
         # 현재 follower 위치, 상태 수신
         pos = msg.pose.pose.position
         vel = msg.twist.twist.linear
@@ -370,6 +367,8 @@ class RLDroneFollowerNode(Node):
         if msg.data and not self.human_detected:
             # 최초 감지 시
             self.human_detected = True
+            if not hasattr(self, 'current_pos'):
+                self.current_pos = np.array([0.0, 0.0, 0.0])
             self.hover_position = self.current_pos.copy()
             
             self.get_logger().warn("⚠️ 사람 감지! 호버링 모드 진입")
@@ -392,18 +391,21 @@ class RLDroneFollowerNode(Node):
         if self.current_state is None or self.action is None:
             return
 
+        if np.linalg.norm(self.action) < 1e-3:
+            return
+
         if self.rescue_active:
             # 구조 모드에서는 RL 제어 스킵
             return
     
         # Action 범위 제한
-        #MAX_DISPLACEMENT = 1.0
-        #dx = np.clip(self.action[0], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
-        #dy = np.clip(self.action[1], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
+        MAX_DISPLACEMENT = 0.5
+        dx = np.clip(self.action[0], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
+        dy = np.clip(self.action[1], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
     
         # ENU 좌표계에서 목표 위치 계산 (변환 불필요)
-        goal_enu_x = float(self.current_pos[0] + self.action[0])
-        goal_enu_y = float(self.current_pos[1] + self.action[1])
+        goal_enu_x = float(self.current_pos[0] + dx)
+        goal_enu_y = float(self.current_pos[1] + dy)
         goal_enu_z = float(self.current_pos[2])  # 고도 유지
     
         # PoseStamped 메시지 생성

@@ -126,17 +126,17 @@ class RescueControllerNode(Node):
         offboard_msg.timestamp = int(current_time.nanoseconds / 1000)
         self.offboard_mode_pub.publish(offboard_msg)
     
-        if hasattr(self, 'humanposition') and self.humanposition is not None:
-            enux, enuy, enuz = self.humanposition  # ENU 유지
+        if hasattr(self, 'human_position') and self.human_position is not None:
+            enux, enuy, enuz = self.human_position  # ENU 유지
             targetx = enux  # 직접 ENU 사용
             targety = enuy
         else:
-            targetx = float(self.currentposition[0])
-            targety = float(self.currentposition[1])
+            targetx = float(self.current_position[0])
+            targety = float(self.current_position[1])
 
         # offboard 상태 확인 추가
-        if self.offboardsetpointcounter < 10:  # 1초 대기
-            self.offboardsetpointcounter += 1
+        if self.offboard_setpoint_counter < 10:  # 1초 대기
+            self.offboard_setpoint_counter += 1
             return
     
         # 1단계: 하강
@@ -161,8 +161,8 @@ class RescueControllerNode(Node):
         
             traj = TrajectorySetpoint()
             traj.position = [
-                float(target_x),
-                float(target_y),
+                float(targetx),
+                float(targety),
                 target_z
             ]
             traj.yaw = 0.0
@@ -175,8 +175,8 @@ class RescueControllerNode(Node):
         
             traj = TrajectorySetpoint()
             traj.position = [
-                float(target_x),
-                float(target_y),
+                float(targetx),
+                float(targety),
                 -self.target_rescue_altitude
             ]
             traj.yaw = 0.0

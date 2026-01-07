@@ -1,37 +1,47 @@
-# odom_converter.py
-
+#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-
 from px4_msgs.msg import VehicleOdometry
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from tf2_ros import TransformBroadcaster
-
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 
 class OdomConverter(Node):
+    def get_odom_msg_type(self, odom_source):  # 클래스 내부에 정의
+        if odom_source == "/fmu/out/vehicle_odometry":
+            return VehicleOdometry
+        elif odom_source == "mavros/local_position/pose":
+            return PoseStamped
+        return VehicleOdometry
+
     def __init__(self):
         super().__init__('odom_converter')
 
-        # Ensure sim time is used
-        self.set_parameters([rclpy.parameter.Parameter(
-            'use_sim_time',
-            rclpy.Parameter.Type.BOOL,
-            True
-        )])
+        # Parameter 설정
+        self.is_sim = self.get_parameter('use_sim_time').get_parameter_value().bool_value
 
-        # Subscribe to PX4 odometry (NED frame)
+        if self.is_sim:
+            self.odom_source = "fmu/out/vehicle_odometry"
+            msg_type = VehicleOdometry
+            callback = self.listener_callback  # PX4용
+        else:
+            self.odom_source = "mavros/local_position/pose"
+            msg_type = PoseStamped
+            callback = self.listener_callback_pose  # MAVROS용
+        self.get_logger().info(f"Using odom source: {self.odom_source}")
+
+        # Odometry 구독
         self.subscription = self.create_subscription(
-            VehicleOdometry,
-            '/fmu/out/vehicle_odometry',
-            self.listener_callback,
-            qos_profile_sensor_data
+            msg_type,
+            self.odom_source,
+            callback,
+            qos_profile_sensor_data,
         )
 
-        # Publish ROS odometry (ENU frame)
+        # ROS Odometry 퍼블리시
         self.publisher = self.create_publisher(Odometry, '/odom', 10)
 
         # TF broadcaster
@@ -41,108 +51,92 @@ class OdomConverter(Node):
         self.odom_frame = 'odom'
         self.base_frame = 'base_link'
 
-        # =====================================================
-        # COORDINATE TRANSFORMATION SETTINGS
-        # =====================================================
-        # PX4 uses NED frame: X=North, Y=East, Z=Down; Body: FRD (Forward-Right-Down)
-        # ROS uses ENU frame: X=East, Y=North, Z=Up; Body: FLU (Forward-Left-Up)
-        
-        # World frame transformation (NED to ENU)
+        # 좌표 변환 행렬 (NED→ENU, FRD→FLU)
         self.world_transform = np.array([
-            [0, 1, 0],  # X_enu = Y_ned (East)
-            [1, 0, 0],  # Y_enu = X_ned (North)
-            [0, 0, -1]  # Z_enu = -Z_ned (Up)
+            [0, 1, 0],   # X_enu = Y_ned (East)
+            [1, 0, 0],   # Y_enu = X_ned (North) 
+            [0, 0, -1]   # Z_enu = -Z_ned (Up)
         ])
 
-        # Body frame transformation (FRD to FLU)
         self.body_transform = np.array([
-            [1, 0, 0],   # X_flu = X_frd (Forward)
-            [0, -1, 0],  # Y_flu = -Y_frd (Left = -Right)
-            [0, 0, -1]   # Z_flu = -Z_frd (Up = -Down)
+            [1, 0, 0],    # X_flu = X_frd (Forward)
+            [0, -1, 0],   # Y_flu = -Y_frd (Left)
+            [0, 0, -1]    # Z_flu = -Z_frd (Up)
         ])
 
     def create_covariance_matrix(self, diagonal_values):
-        """Create a proper 6x6 covariance matrix with only diagonal elements."""
+        """6x6 공분산 행렬 생성"""
         cov = np.zeros((6, 6))
         np.fill_diagonal(cov, diagonal_values)
         return cov.flatten().tolist()
 
     def transform_vector(self, px4_vector, transform_matrix):
-        """Transform a 3D vector using the given matrix."""
+        """3D 벡터 변환"""
         return transform_matrix @ px4_vector
 
     def transform_orientation(self, px4_quaternion):
-        """Transform orientation from PX4 NED/FRD to ROS ENU/FLU."""
-        # Convert PX4 quaternion (w, x, y, z) to scipy format (x, y, z, w)
+        """방향 변환: PX4(NED/FRD) → ROS(ENU/FLU)"""
+        # PX4 quat (w,x,y,z) → scipy (x,y,z,w)
         q_scipy = [px4_quaternion[1], px4_quaternion[2], px4_quaternion[3], px4_quaternion[0]]
         
-        # Get rotation matrix from quaternion
-        r_ned_frd = R.from_quat(q_scipy)
-        R_ned_frd = r_ned_frd.as_matrix()
+        # 회전 행렬 변환
+        r_ned_frd = R.from_quat(q_scipy).as_matrix()
+        R_enu_flu = self.world_transform @ r_ned_frd @ self.body_transform
         
-        # Apply transformation: R_enu_flu = world_transform @ R_ned_frd @ body_transform
-        R_enu_flu = self.world_transform @ R_ned_frd @ self.body_transform
-        
-        # Convert back to quaternion
-        r_enu_flu = R.from_matrix(R_enu_flu)
-        q_enu = r_enu_flu.as_quat()  # [x, y, z, w]
-        
-        # Ensure quaternion has positive w (convention)
+        # quat 복원 (w>0 보장)
+        q_enu = R.from_matrix(R_enu_flu).as_quat()
         if q_enu[3] < 0:
             q_enu = [-x for x in q_enu]
-        
         return q_enu
 
     def listener_callback(self, msg: VehicleOdometry):
+        """PX4 Odometry → ROS Odometry 변환"""
         odom = Odometry()
         odom.header.stamp = self.get_clock().now().to_msg()
         odom.header.frame_id = self.odom_frame
         odom.child_frame_id = self.base_frame
 
-        # --- Position transformation (NED to ENU) ---
-        position_ned = np.array([msg.position[0], msg.position[1], msg.position[2]])
+        # 위치 변환 (NED → ENU)
+        position_ned = np.array(msg.position)
         position_enu = self.transform_vector(position_ned, self.world_transform)
         odom.pose.pose.position.x = float(position_enu[0])
         odom.pose.pose.position.y = float(position_enu[1])
         odom.pose.pose.position.z = float(position_enu[2])
 
-        # --- Orientation transformation (NED/FRD to ENU/FLU) ---
+        # 방향 변환
         q_enu = self.transform_orientation(msg.q)
         odom.pose.pose.orientation.x = q_enu[0]
         odom.pose.pose.orientation.y = q_enu[1]
         odom.pose.pose.orientation.z = q_enu[2]
         odom.pose.pose.orientation.w = q_enu[3]
 
-        # --- Velocity transformation (based on velocity_frame) ---
-        velocity_ned = np.array([msg.velocity[0], msg.velocity[1], msg.velocity[2]])
-        if msg.velocity_frame == 1:  # VELOCITY_FRAME_NED
+        # 속도 변환
+        velocity_ned = np.array(msg.velocity)
+        if msg.velocity_frame == 1:  # NED
             velocity_enu = self.transform_vector(velocity_ned, self.world_transform)
-        elif msg.velocity_frame == 3:  # VELOCITY_FRAME_BODY_FRD
+        else:  # Body FRD
             velocity_enu = self.transform_vector(velocity_ned, self.body_transform)
-        else:
-            velocity_enu = velocity_ned  # Fallback, though unlikely
         odom.twist.twist.linear.x = float(velocity_enu[0])
         odom.twist.twist.linear.y = float(velocity_enu[1])
         odom.twist.twist.linear.z = float(velocity_enu[2])
 
-        # --- Angular velocity transformation (FRD to FLU) ---
+        # 각속도 변환 (FRD → FLU)
         av_frd = np.array(msg.angular_velocity)
         av_flu = self.transform_vector(av_frd, self.body_transform)
         odom.twist.twist.angular.x = float(av_flu[0])
         odom.twist.twist.angular.y = float(av_flu[1])
         odom.twist.twist.angular.z = float(av_flu[2])
 
-        # --- Covariances ---
-        pose_diagonal = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
-        twist_diagonal = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01]
-        
-        odom.pose.covariance = self.create_covariance_matrix(pose_diagonal)
-        odom.twist.covariance = self.create_covariance_matrix(twist_diagonal)
+        # 공분산
+        pose_cov = self.create_covariance_matrix([0.01]*6)
+        twist_cov = self.create_covariance_matrix([0.01]*6)
+        odom.pose.covariance = pose_cov
+        odom.twist.covariance = twist_cov
 
-        # Publish /odom
+        # 퍼블리시
         self.publisher.publish(odom)
 
-        # Broadcast TF (odom → base_link)
+        # TF (odom → base_link)
         t = TransformStamped()
         t.header.stamp = odom.header.stamp
         t.header.frame_id = self.odom_frame
@@ -152,6 +146,45 @@ class OdomConverter(Node):
         t.transform.translation.z = odom.pose.pose.position.z
         t.transform.rotation = odom.pose.pose.orientation
         self.tf_broadcaster.sendTransform(t)
+    
+    def listener_callback_pose(self, msg: PoseStamped):
+        odom = Odometry()
+        odom.header.stamp = self.get_clock().now().to_msg()
+        odom.header.frame_id = self.odom_frame
+        odom.child_frame_id = self.base_frame
+
+        # PoseStamped는 이미 ENU
+        odom.pose.pose.position.x = msg.pose.position.x
+        odom.pose.pose.position.y = msg.pose.position.y
+        odom.pose.pose.position.z = msg.pose.position.z
+
+        odom.pose.pose.orientation = msg.pose.orientation
+
+        # 속도 정보는 없으니 일단 0
+        odom.twist.twist.linear.x = 0.0
+        odom.twist.twist.linear.y = 0.0
+        odom.twist.twist.linear.z = 0.0
+
+        odom.twist.twist.angular.x = 0.0
+        odom.twist.twist.angular.y = 0.0
+        odom.twist.twist.angular.z = 0.0
+
+        # 공분산은 기존 함수 재사용
+        odom.pose.covariance = self.create_covariance_matrix([0.01]*6)
+        odom.twist.covariance = self.create_covariance_matrix([0.01]*6)
+
+        self.publisher.publish(odom)
+
+        t = TransformStamped()
+        t.header.stamp = odom.header.stamp
+        t.header.frame_id = self.odom_frame
+        t.child_frame_id = self.base_frame
+        t.transform.translation.x = odom.pose.pose.position.x
+        t.transform.translation.y = odom.pose.pose.position.y
+        t.transform.translation.z = odom.pose.pose.position.z
+        t.transform.rotation = odom.pose.pose.orientation
+        self.tf_broadcaster.sendTransform(t)
+
 
 def main(args=None):
     rclpy.init(args=args)

@@ -13,7 +13,6 @@ from ros_gz_interfaces.srv import SpawnEntity, DeleteEntity
 from nav_msgs.msg import Odometry
 import numpy as np
 import time
-import Jetson.GPIO as GPIO
 
 
 class WaterSprayGazeboNode(Node):
@@ -151,7 +150,7 @@ class WaterSprayGazeboNode(Node):
 class WaterSprayHardwareNode(Node):
     def __init__(self):
         super().__init__('water_spray_hardware')
-        
+        import Jetson.GPIO as GPIO
         self.spraying = False
         self.RELAY_PIN = 7
 
