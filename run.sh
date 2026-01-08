@@ -77,7 +77,7 @@ echo -e "${GREEN}MAVROS PID: $MAVROS_PID${NC}"
 sleep 5
 
 # SLAM
-echo -e "${YELLOW}=== 3/7 ROS2 SLAM ===${NC}"
+echo -e "${YELLOW}=== 3/7 ROS2 ===${NC}"
 (
     source "$ROS_ENV/bin/activate" 2>/dev/null || true
     source "$ROS2_WS/install/setup.bash"
@@ -86,14 +86,6 @@ echo -e "${YELLOW}=== 3/7 ROS2 SLAM ===${NC}"
 SLAM_PID=$!
 echo -e "${GREEN}SLAM PID: $SLAM_PID${NC}"
 sleep 10
-
-# SLAM 자동 활성화
-source "$ROS2_WS/install/setup.bash"
-if ros2 lifecycle get /slam_toolbox 2>/dev/null | grep -q "inactive"; then
-    echo "SLAM 활성화..."
-    ros2 lifecycle set /slam_toolbox activate
-    sleep 3
-fi
 
 
 # Offboard Mission
@@ -116,7 +108,7 @@ ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
 
 echo -e "${GREEN}🚀 === 모든 프로세스 실행 완료! ===${NC}"
 echo "📁 로그: $LOG_DIR"
-echo "🔢 PID: GCS($GCS_PID) PX4($PX4_PID) DDS($DDS_PID) SLAM($SLAM_PID) MAVROS($MAVROS_PID) ODOM($ODOM_PID) RL($RL_PID) CTRL($CONTROL_PID)"
+echo "🔢 PID: GCS($GCS_PID) PX4($PX4_PID) DDS($DDS_PID) ROS2($SLAM_PID) MAVROS($MAVROS_PID) ODOM($ODOM_PID) RL($RL_PID) CTRL($CONTROL_PID)"
 
 # 종료 트랩
 trap "echo -e '\n${RED}종료 중...${NC}'; kill $GCS_PID $PX4_PID $DDS_PID $SLAM_PID $MAVROS_PID $ODOM_PID $RL_PID $CONTROL_PID $GZCLIENT_PID 2>/dev/null; exit" INT TERM

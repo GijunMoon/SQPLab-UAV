@@ -330,7 +330,6 @@ class RLDroneFollowerNode(Node):
         if self.takeoff_done:
             if self.human_detected:
                 # RL 액션 대신 현재 위치 유지
-                self.action = np.array([0.0, 0.0])  # 제자리
                 self.get_logger().debug("호버링 중...")
             else:
                 # 정상 RL 제어
@@ -367,19 +366,8 @@ class RLDroneFollowerNode(Node):
         if msg.data and not self.human_detected:
             # 최초 감지 시
             self.human_detected = True
-            if not hasattr(self, 'current_pos'):
-                self.current_pos = np.array([0.0, 0.0, 0.0])
-            self.hover_position = self.current_pos.copy()
-            
             self.get_logger().warn("⚠️ 사람 감지! 호버링 모드 진입")
             
-            # 알림 메시지 발행
-            alert_msg = String()
-            alert_msg.data = f"Human detected at position: " \
-                           f"x={self.hover_position[0]:.2f}, " \
-                           f"y={self.hover_position[1]:.2f}, " \
-                           f"z={self.hover_position[2]:.2f}"
-            self.alert_pub.publish(alert_msg)
         
         elif not msg.data and self.human_detected:
             # 감지 해제 시
@@ -399,7 +387,7 @@ class RLDroneFollowerNode(Node):
             return
     
         # Action 범위 제한
-        MAX_DISPLACEMENT = 0.5
+        MAX_DISPLACEMENT = 0.3
         dx = np.clip(self.action[0], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
         dy = np.clip(self.action[1], -MAX_DISPLACEMENT, MAX_DISPLACEMENT)
     
@@ -411,7 +399,7 @@ class RLDroneFollowerNode(Node):
         # PoseStamped 메시지 생성
         goal_msg = PoseStamped()
         goal_msg.header.stamp = self.get_clock().now().to_msg()
-        goal_msg.header.frame_id = "map"  # 또는 "odom"
+        goal_msg.header.frame_id = "odom"
     
         goal_msg.pose.position.x = goal_enu_x
         goal_msg.pose.position.y = goal_enu_y

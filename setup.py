@@ -37,6 +37,7 @@ setup(
             'rescue_controller_node = drone_slam.rescue_controller_node:main',
             'offboard_mission = drone_slam.offboard_mission:main',
             'water_spray_gazebo = drone_slam.water_spray_gazebo:main',
+            'vfh_override = drone_slam.vfh_node:main',
             
             # 상태 관리자
             'state_manager = drone_slam.state_manager:main',
