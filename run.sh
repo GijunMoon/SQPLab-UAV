@@ -46,7 +46,7 @@ done
 sleep 2
 
 # 1. PX4-Gazebo
-echo -e "${YELLOW}=== 1/7 PX4-Gazebo (GUI) ===${NC}"
+echo -e "${YELLOW}=== PX4-Gazebo (GUI) ===${NC}"
 (
     cd "$PX4_DIR" || { echo -e "${RED}PX4 오류${NC}"; exit 1; }
     GZ_WEB=false PX4_GZ_WORLD=walls make px4_sitl gz_x500 > "$LOG_DIR/px4.log" 2>&1
@@ -60,14 +60,14 @@ gzclient &> "$LOG_DIR/gzclient.log" &
 GZCLIENT_PID=$!
 
 # 2. DDS
-echo -e "${YELLOW}=== 2/7 MicroXRCEAgent ===${NC}"
+echo -e "${YELLOW}=== MicroXRCEAgent ===${NC}"
 MicroXRCEAgent udp4 -p 8888 > "$LOG_DIR/dds.log" 2>&1 &
 DDS_PID=$!
 echo -e "${GREEN}DDS PID: $DDS_PID${NC}"
 sleep 3
 
 # MAVROS
-echo -e "${YELLOW}=== 4/7 MAVROS ===${NC}"
+echo -e "${YELLOW}=== MAVROS ===${NC}"
 (
     source "$ROS2_WS/install/setup.bash"
     ros2 launch mavros px4.launch fcu_url:=udp://:14540@127.0.0.1:14580 > "$LOG_DIR/mavros.log" 2>&1
@@ -77,7 +77,7 @@ echo -e "${GREEN}MAVROS PID: $MAVROS_PID${NC}"
 sleep 5
 
 # SLAM
-echo -e "${YELLOW}=== 3/7 ROS2 ===${NC}"
+echo -e "${YELLOW}=== ROS2 ===${NC}"
 (
     source "$ROS_ENV/bin/activate" 2>/dev/null || true
     source "$ROS2_WS/install/setup.bash"
@@ -89,7 +89,7 @@ sleep 10
 
 
 # Offboard Mission
-echo -e "${YELLOW}=== 7/7 Offboard Mission ===${NC}"
+echo -e "${YELLOW}=== Offboard Mission ===${NC}"
 (
     source "$ROS_ENV/bin/activate" 2>/dev/null || true
     source "$ROS2_WS/install/setup.bash"
@@ -107,8 +107,8 @@ ros2 service call /mavros/set_mode mavros_msgs/srv/SetMode "{custom_mode: 'OFFBO
 ros2 service call /mavros/cmd/arming mavros_msgs/srv/CommandBool "{value: true}"
 
 echo -e "${GREEN}🚀 === 모든 프로세스 실행 완료! ===${NC}"
-echo "📁 로그: $LOG_DIR"
-echo "🔢 PID: GCS($GCS_PID) PX4($PX4_PID) DDS($DDS_PID) ROS2($SLAM_PID) MAVROS($MAVROS_PID) ODOM($ODOM_PID) RL($RL_PID) CTRL($CONTROL_PID)"
+echo "로그: $LOG_DIR"
+echo "PID: GCS($GCS_PID) PX4($PX4_PID) DDS($DDS_PID) ROS2($SLAM_PID) MAVROS($MAVROS_PID) ODOM($ODOM_PID) RL($RL_PID) CTRL($CONTROL_PID)"
 
 # 종료 트랩
 trap "echo -e '\n${RED}종료 중...${NC}'; kill $GCS_PID $PX4_PID $DDS_PID $SLAM_PID $MAVROS_PID $ODOM_PID $RL_PID $CONTROL_PID $GZCLIENT_PID 2>/dev/null; exit" INT TERM

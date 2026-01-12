@@ -43,7 +43,7 @@ class WaterSprayGazeboNode(Node):
         while not self.spawn_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Spawn service 대기 중...')
         
-        self.timer = self.create_timer(0.2, self.spawn_drops)
+        self.timer = self.create_timer(0.5, self.spawn_drops)
         self.cleanup_timer = self.create_timer(1.0, self.cleanup_old_drops)
         
         self.drop_id = 0
@@ -63,7 +63,7 @@ class WaterSprayGazeboNode(Node):
             return
         
         # 5개의 물방울 동시 생성
-        for _ in range(5):
+        for _ in range(1):
             self.spawn_single_drop()
     
     def spawn_single_drop(self):

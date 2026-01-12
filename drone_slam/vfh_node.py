@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+
+# ==============================
+# Author: sqplab
+# Date: 2026-01-09
+# Description: VFH 기반 회피 보조제어
+# ==============================
+
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan

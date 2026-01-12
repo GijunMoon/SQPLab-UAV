@@ -62,13 +62,6 @@ class OffboardTakeoffNode(Node):
             self.setpoint_sent += 1
             return
 
-        if self.rescue_active or self.rescue_triggered or self.is_holding:
-            # 구조 동작일 때는 구조동작에서 publish하는 setpoint만 따라감
-            self.target_pose.pose.position.x = 0.0
-            self.target_pose.pose.position.y = 0.0
-            self.target_pose.pose.position.z = 3.0
-            self.get_logger().debug("구조 모드: 호버링 유지")
-
 
     def goal_pose_callback(self, msg):
         # RL에서 새로운 목표 위치가 오면 위에 바로 반영

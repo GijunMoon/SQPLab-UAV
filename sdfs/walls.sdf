@@ -1,0 +1,105 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<sdf version="1.9">
+  <world name="walls">
+    
+    <physics name="default_physics" type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <latitude_deg>35.1570</latitude_deg> <longitude_deg>128.0928</longitude_deg>  <elevation>0.0</elevation>
+      <heading_deg>0</heading_deg>
+    </spherical_coordinates>
+
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.2 -1.0</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <surface>
+            <friction>
+              <ode><mu>100</mu><mu2>50</mu2></ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material>
+            <script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script>
+          </material>
+        </visual>
+      </link>
+    </model>
+    
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 10 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>20 0.3 10</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>20 0.3 10</size></box></geometry><material><ambient>0.1 0.4 0.8 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-10 0 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.3 20 10</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.3 20 10</size></box></geometry><material><ambient>0.1 0.4 0.8 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="wall_east">
+      <static>true</static>
+      <pose>10 0 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.3 20 10</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.3 20 10</size></box></geometry><material><ambient>0.1 0.4 0.8 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="pillar_1"><static>true</static><pose>-5 -6 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+
+    <model name="pillar_2"><static>true</static><pose>-2 -6 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+
+    <model name="pillar_3"><static>true</static><pose>2 -6 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+    <model name="pillar_4"><static>true</static><pose>-4 -2 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+    <model name="pillar_5"><static>true</static><pose>0 -2.5 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+
+    <model name="pillar_6"><static>true</static><pose>3 -2 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+    <model name="pillar_7"><static>true</static><pose>-1 2 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+    <model name="pillar_8"><static>true</static><pose>1 4 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+    <model name="pillar_9"><static>true</static><pose>4 5 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+    <model name="pillar_10"><static>true</static><pose>-3 6 1.5 0 0 0</pose><link name="l"><collision name="c"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry></collision><visual name="v"><geometry><cylinder><radius>0.5</radius><length>7.0</length></cylinder></geometry><material><diffuse>0.4 0.5 1.0 1</diffuse></material></visual></link></model>
+    <model name="fallen_person">
+     <static>true</static>
+     <pose>0 -8 0.3 0 1.5708 0</pose> <!-- y=-8 (North 벽 앞), z=0.3 (바닥 위) -->
+     <link name="link">
+       <visual name="v">
+         <geometry><box><size>0.6 0.25 1.6</size></box></geometry>
+         <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.8 0.1 0.1 1</diffuse></material> <!-- 빨간색 -->
+       </visual>
+       <collision name="c">
+         <geometry><box><size>0.6 0.25 1.6</size></box></geometry>
+       </collision>
+     </link>
+   </model>
+  </world>
+</sdf>

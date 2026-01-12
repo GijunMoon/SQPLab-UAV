@@ -317,7 +317,7 @@ class RLDroneFollowerNode(Node):
 
         dist_xy = np.linalg.norm([dx, dy])
     
-        if dist_xy < 1.0:
+        if dist_xy < 5.0:
             self.get_logger().info(f"Waypoint #{self.current_wp_index} 도달")
             self.current_wp_index += 1
             if self.current_wp_index < len(self.waypoints):
@@ -376,14 +376,13 @@ class RLDroneFollowerNode(Node):
             self.hover_position = None
 
     def infer_and_publish_goal(self):
+        if self.rescue_active:
+            return  # 구조 모드 시 RL 제어 중지
+            
         if self.current_state is None or self.action is None:
             return
 
         if np.linalg.norm(self.action) < 1e-3:
-            return
-
-        if self.rescue_active:
-            # 구조 모드에서는 RL 제어 스킵
             return
     
         # Action 범위 제한

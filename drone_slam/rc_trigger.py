@@ -1,3 +1,9 @@
+# ==============================
+# Author: sqplab
+# Date: 2025-09-23
+# Description: RC 스위치로 오프보드 모드 토글
+# ==============================
+
 from std_msgs.msg import Bool
 
 class RCSwitchTrigger(Node):
